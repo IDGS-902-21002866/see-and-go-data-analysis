@@ -1,0 +1,22 @@
+# Entorno virtual
+env/
+
+# Secretos
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# IDEs
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Claude Code
+/.claude

@@ -1,0 +1,2 @@
+picamera2         # cámara CSI
+gpiozero          # GPIO (uso futuro)
