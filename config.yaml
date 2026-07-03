@@ -1,24 +1,24 @@
 mqtt:
-  host: localhost        # IP o hostname del broker Mosquitto
+  host: localhost # IP o hostname del broker Mosquitto
   port: 1883
-  topic_prefix: seengo/comandos  # el topic final sera seengo/comandos/{deviceId}
+  topic_prefix: seengo/comandos # el topic final sera seengo/comandos/{deviceId}
 
 mongo:
   database: seengo
-  collection_signs: user_signs    # mapeo gesto→accion por usuario
-  collection_events: sign_events  # telemetria de reconocimientos
+  collection_signs: user_signs # mapeo gesto→accion por usuario
+  collection_events: sign_events # telemetria de reconocimientos
 
 model:
   path: models/rf_signs.joblib
 
 camera:
-  index: 0          # 0 = webcam principal; cambia a 1 si tienes varias
+  index: 0 # 0 = webcam principal; cambia a 1 si tienes varias
   width: 640
   height: 480
 
 inference:
-  confidence_threshold: 0.80   # ignorar predicciones con confianza menor a este valor
-  cooldown_seconds: 1.0        # tiempo minimo entre disparos del mismo gesto (debounce)
+  confidence_threshold: 0.80 # ignorar predicciones con confianza menor a este valor
+  cooldown_seconds: 1.0 # tiempo minimo entre disparos del mismo gesto (debounce)
 
 session:
-  user_id: migueldr12           # userId fijo por sesion (mientras no haya login desde la app)
+  user_id: migueldr12 # userId fijo por sesion (mientras no haya login desde la app)

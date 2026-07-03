@@ -11,12 +11,15 @@ class Camera:
     # camara_index = 0 quiere decir que se usa la camara por defecto del sistema
     # classifier como None
     #  Si se tienen varias camaras 0 = camara principal, 1 = segunda camara
-    def __init__(self, camera_index=0, classifier=None):
+    def __init__(self, camera_index=0, classifier=None, debouncer=None):
         #  Guardamos el índice de la cámara en la instancia
         self.camera_index = camera_index
 
         # Guardamos el clasificador
         self.classifier = classifier
+
+        # Guardamos el debouncer
+        self.debouncer = debouncer
 
         # Guardamos el opjeto de videocapture de openCv
         self.cap = None
@@ -67,6 +70,9 @@ class Camera:
                     (0, 255, 255),
                     2,
                 )
+
+                if gesto is not None and self.debouncer.should_fire(gesto):
+                    print(f"Disparando gesto: {gesto}")
 
             # Primer parametro, nombre de la ventana. Segundo parametro, frame que queremos mostrar
             cv2.imshow("Gesture Assitant", frame)
