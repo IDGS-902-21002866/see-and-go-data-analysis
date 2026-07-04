@@ -37,4 +37,5 @@ session:
 devices:
   foco-sala:
     type: kasa # TP-Link Kasa KL125 — control local con python-kasa
-    host: 192.168.1.14 # IP del foco (kasa --host <ip> para verificar)
+    host: 192.168.1.14 # IP del foco (cache; se auto-corrige buscando por MAC)
+    mac: b0:a7:b9:b2:3a:8d # identidad permanente del aparato

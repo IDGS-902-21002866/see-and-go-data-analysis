@@ -74,6 +74,66 @@ DRIVERS = {
 }
 
 
+# -----------------------------------------------------------------
+# Auto-recuperacion por MAC: la MAC es la identidad permanente del
+# aparato; la IP es solo un cache que se refresca solo si cambia.
+# -----------------------------------------------------------------
+
+
+def _normalizar_mac(mac: str) -> str:
+    return (mac or "").lower().replace("-", ":")
+
+
+async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
+    """Barre la subred con discovery DIRIGIDO buscando la MAC del dispositivo.
+
+    Dirigido IP por IP (no broadcast), asi funciona aunque el router lo
+    bloquee. Devuelve la nueva IP, o None si no aparecio en la red.
+    """
+    mac_objetivo = _normalizar_mac(device_cfg.get("mac"))
+    if not mac_objetivo:
+        print(f"[actuador] {device_id} no tiene MAC registrada; no puedo re-descubrir")
+        return None
+
+    # Subred /24 a partir de la ultima IP conocida: "192.168.1.14" → "192.168.1"
+    base = device_cfg["host"].rsplit(".", 1)[0]
+    print(f"[actuador] Buscando {device_id} (MAC {mac_objetivo}) en {base}.0/24 ...")
+
+    # Maximo 50 sondeos simultaneos para no saturar la Pi
+    sem = asyncio.Semaphore(50)
+
+    async def sondear(ip: str) -> str | None:
+        async with sem:
+            try:
+                dev = await Discover.discover_single(ip, timeout=2)
+                if _normalizar_mac(dev.mac) == mac_objetivo:
+                    return ip
+            except Exception:
+                pass  # IP sin dispositivo kasa: silencio y seguimos
+            return None
+
+    resultados = await asyncio.gather(*[sondear(f"{base}.{i}") for i in range(1, 255)])
+    for ip in resultados:
+        if ip is not None:
+            return ip
+    return None
+
+
+# Handle a la coleccion user_devices (se asigna en main si Mongo respondio);
+# permite persistir la IP nueva para que sobreviva reinicios del actuador
+_devices_collection = None
+
+
+def _update_host_in_mongo(device_id: str, host: str) -> None:
+    if _devices_collection is None:
+        return
+    try:
+        _devices_collection.update_one({"deviceId": device_id}, {"$set": {"host": host}})
+        print(f"[actuador] Registro actualizado en Mongo: {device_id} → {host}")
+    except Exception as e:
+        print(f"[actuador] No se pudo actualizar host en Mongo: {e}")
+
+
 async def ejecutar(device_id: str, device_cfg: dict, action: str):
     tipo = device_cfg.get("type")
     driver = DRIVERS.get(tipo)
@@ -85,11 +145,36 @@ async def ejecutar(device_id: str, device_cfg: dict, action: str):
     try:
         await driver(device_id, device_cfg, action)
         print(f"[actuador] {device_id} → {action} OK")
+        return
     except Exception as e:
         # Si el aparato cambio de IP o se desconecto, olvidamos el cache
         # para forzar un re-descubrimiento en el siguiente comando
         _kasa_cache.pop(device_id, None)
         print(f"[actuador] Error con {device_id}: {e}")
+
+    # Auto-recuperacion: quiza la IP cambio. Buscamos el aparato por su MAC
+    # (solo kasa por ahora; el barrido usa el discovery de python-kasa)
+    if tipo != "kasa":
+        return
+
+    nueva_ip = await _rediscover_by_mac(device_id, device_cfg)
+    if nueva_ip is None:
+        print(f"[actuador] {device_id} no encontrado en la red")
+        return
+
+    print(f"[actuador] {device_id} reapareció en {nueva_ip}")
+
+    # Actualizamos el registro en memoria (device_cfg es el dict compartido)
+    # y lo persistimos en Mongo para que sobreviva reinicios
+    device_cfg["host"] = nueva_ip
+    _update_host_in_mongo(device_id, nueva_ip)
+
+    # Reintentamos el comando una vez con la IP nueva
+    try:
+        await driver(device_id, device_cfg, action)
+        print(f"[actuador] {device_id} → {action} OK (tras re-descubrir)")
+    except Exception as e:
+        print(f"[actuador] Sigue fallando {device_id}: {e}")
 
 
 # -----------------------------------------------------------------
@@ -99,12 +184,16 @@ async def ejecutar(device_id: str, device_cfg: dict, action: str):
 
 def load_devices_from_mongo(uri: str, database: str, collection: str) -> dict | None:
     """Lee user_devices y devuelve {deviceId: doc}, o None si Mongo falla."""
+    global _devices_collection
     try:
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        docs = list(client[database][collection].find({}))
+        col = client[database][collection]
+        docs = list(col.find({}))
         if not docs:
             print("[actuador] user_devices vacio en Mongo")
             return None
+        # Guardamos el handle para poder persistir IPs re-descubiertas
+        _devices_collection = col
         return {d["deviceId"]: d for d in docs}
     except Exception as e:
         print(f"[actuador] No se pudo leer user_devices: {e}")
