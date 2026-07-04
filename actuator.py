@@ -18,6 +18,8 @@ Corre como proceso separado en la Pi:
 import asyncio
 import json
 import os
+import socket
+import time
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -104,9 +106,67 @@ async def _driver_tuya(device_id: str, device_cfg: dict, action: str):
     await asyncio.to_thread(_run)
 
 
+def _cozylife_request(host: str, payload: dict, timeout: float = 5) -> dict:
+    """Manda un mensaje JSON al puerto 5555 y devuelve la respuesta parseada.
+
+    Protocolo local CozyLife: JSON + \r\n sobre TCP. cmd 0 = info,
+    cmd 2 = consultar estado, cmd 3 = controlar. attr 1 = switch principal.
+    """
+    s = socket.create_connection((host, 5555), timeout=timeout)
+    try:
+        s.sendall((json.dumps(payload) + "\r\n").encode())
+        s.settimeout(timeout)
+        data = b""
+        while b"\n" not in data:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        return json.loads(data.decode())
+    finally:
+        s.close()
+
+
+async def _driver_cozylife(device_id: str, device_cfg: dict, action: str):
+    """Control local del Smart Socket XLD01 (app CozyLife) sin nube ni claves."""
+    host = device_cfg["host"]
+
+    def _run():
+        sn = str(int(time.time() * 1000))
+
+        if action == "toggle":
+            estado = _cozylife_request(
+                host, {"cmd": 2, "pv": 0, "sn": sn, "msg": {"attr": [1]}}
+            )
+            encendido = bool(estado.get("msg", {}).get("data", {}).get("1"))
+            valor = 0 if encendido else 255
+        elif action == "on":
+            valor = 255
+        elif action == "off":
+            valor = 0
+        else:
+            raise ValueError(f"Accion desconocida: {action}")
+
+        resp = _cozylife_request(
+            host, {"cmd": 3, "pv": 0, "sn": sn, "msg": {"attr": [1], "data": {"1": valor}}}
+        )
+
+        # Algunos firmware esperan 1 en vez de 255 para encender
+        if resp.get("res") != 0 and valor == 255:
+            resp = _cozylife_request(
+                host, {"cmd": 3, "pv": 0, "sn": sn, "msg": {"attr": [1], "data": {"1": 1}}}
+            )
+
+        if resp.get("res") != 0:
+            raise ConnectionError(f"cozylife respondio res={resp.get('res')}")
+
+    await asyncio.to_thread(_run)
+
+
 DRIVERS = {
     "kasa": _driver_kasa,
     "tuya": _driver_tuya,
+    "cozylife": _driver_cozylife,
 }
 
 
