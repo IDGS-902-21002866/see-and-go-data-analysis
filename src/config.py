@@ -10,6 +10,7 @@ class MqttConfig(BaseModel):
     host: str
     port: int
     topic_prefix: str
+    publisher: str = "stub"  # stub | mqtt
     user: str = ""
     password: str = ""
 
@@ -26,9 +27,13 @@ class ModelConfig(BaseModel):
 
 
 class CameraConfig(BaseModel):
+    type: str = "webcam"  # webcam | csi
     index: int
     width: int
     height: int
+    headless: bool = False
+    hflip: bool = False
+    vflip: bool = False
 
 
 class InferenceConfig(BaseModel):

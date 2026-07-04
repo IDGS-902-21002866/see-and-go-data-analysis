@@ -2,6 +2,7 @@ mqtt:
   host: localhost # IP o hostname del broker Mosquitto
   port: 1883
   topic_prefix: seengo/comandos # el topic final sera seengo/comandos/{deviceId}
+  publisher: stub # stub = solo imprime (dev) | mqtt = publica al broker real (produccion)
 
 mongo:
   database: seengo
@@ -12,9 +13,13 @@ model:
   path: models/rf_signs.joblib
 
 camera:
-  index: 0 # 0 = webcam principal; cambia a 1 si tienes varias
+  type: webcam # webcam = OpenCV (dev Windows) | csi = Picamera2 (Raspberry Pi)
+  index: 0 # 0 = webcam principal; cambia a 1 si tienes varias (solo webcam)
   width: 640
   height: 480
+  headless: false # true = sin ventana de video (Pi por SSH, sin monitor)
+  hflip: false # espejo horizontal (solo csi)
+  vflip: false # volteo vertical (solo csi); hflip+vflip = rotacion 180
 
 inference:
   confidence_threshold: 0.80 # ignorar predicciones con confianza menor a este valor
