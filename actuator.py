@@ -42,9 +42,14 @@ _kasa_cache = {}
 async def _driver_kasa(device_id: str, device_cfg: dict, action: str):
     dev = _kasa_cache.get(device_id)
     if dev is None:
-        # discover_single es DIRIGIDO a la IP (no broadcast): funciona
-        # aunque el router bloquee el discovery general
-        dev = await Discover.discover_single(device_cfg["host"], timeout=5)
+        # Conexion DIRECTA por TCP al puerto 9999 (sin discovery UDP):
+        # el discovery se pierde facil en WiFi; TCP es confiable
+        try:
+            from kasa.iot import IotBulb  # python-kasa >= 0.6
+        except ImportError:
+            from kasa import SmartBulb as IotBulb  # versiones anteriores
+
+        dev = IotBulb(device_cfg["host"])
         _kasa_cache[device_id] = dev
 
     # update() refresca el estado real (is_on) antes de actuar
