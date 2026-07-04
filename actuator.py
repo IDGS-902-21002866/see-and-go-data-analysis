@@ -177,41 +177,94 @@ DRIVERS = {
 
 
 def _normalizar_mac(mac: str) -> str:
-    return (mac or "").lower().replace("-", ":")
+    # "B0:A7-B9..." y "b0a7b9..." deben comparar igual
+    return (mac or "").lower().replace("-", "").replace(":", "")
+
+
+def _subred_local() -> str | None:
+    """Prefijo /24 de la IP actual de la Pi (ej. '192.168.1').
+
+    Se usa para el barrido: si la Pi se mudo de red (hotspot, otro router),
+    los dispositivos estaran en SU subred actual, no en la del registro.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # no manda nada; solo resuelve la IP local
+        ip = s.getsockname()[0]
+        s.close()
+        return ip.rsplit(".", 1)[0]
+    except Exception:
+        return None
+
+
+async def _sondear_kasa(ip: str) -> str | None:
+    """Devuelve la MAC del dispositivo kasa en esa IP, o None."""
+    try:
+        dev = await Discover.discover_single(ip, timeout=2)
+        return _normalizar_mac(dev.mac)
+    except Exception:
+        return None
+
+
+async def _sondear_cozylife(ip: str) -> str | None:
+    """Devuelve la MAC del dispositivo cozylife en esa IP, o None."""
+    def _run():
+        sn = str(int(time.time() * 1000))
+        resp = _cozylife_request(ip, {"cmd": 0, "pv": 0, "sn": sn, "msg": {}}, timeout=2)
+        return _normalizar_mac(resp.get("msg", {}).get("mac"))
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception:
+        return None
+
+
+# Que sonda usar para re-descubrir cada tipo de dispositivo
+SONDAS = {
+    "kasa": _sondear_kasa,
+    "cozylife": _sondear_cozylife,
+}
 
 
 async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
-    """Barre la subred con discovery DIRIGIDO buscando la MAC del dispositivo.
+    """Barre la subred sondeando IP por IP hasta hallar la MAC del dispositivo.
 
-    Dirigido IP por IP (no broadcast), asi funciona aunque el router lo
-    bloquee. Devuelve la nueva IP, o None si no aparecio en la red.
+    Dirigido (no broadcast), asi funciona aunque el router lo bloquee.
+    Devuelve la nueva IP, o None si no aparecio en la red.
     """
+    sonda = SONDAS.get(device_cfg.get("type"))
+    if sonda is None:
+        return None
+
     mac_objetivo = _normalizar_mac(device_cfg.get("mac"))
     if not mac_objetivo:
         print(f"[actuador] {device_id} no tiene MAC registrada; no puedo re-descubrir")
         return None
 
-    # Subred /24 a partir de la ultima IP conocida: "192.168.1.14" → "192.168.1"
-    base = device_cfg["host"].rsplit(".", 1)[0]
-    print(f"[actuador] Buscando {device_id} (MAC {mac_objetivo}) en {base}.0/24 ...")
+    # Subredes a revisar: la actual de la Pi primero, la del registro despues
+    bases = []
+    local = _subred_local()
+    if local:
+        bases.append(local)
+    registrada = device_cfg["host"].rsplit(".", 1)[0]
+    if registrada not in bases:
+        bases.append(registrada)
 
-    # Maximo 50 sondeos simultaneos para no saturar la Pi
-    sem = asyncio.Semaphore(50)
+    # Maximo 30 sondeos simultaneos para no saturar la Pi
+    sem = asyncio.Semaphore(30)
 
     async def sondear(ip: str) -> str | None:
         async with sem:
-            try:
-                dev = await Discover.discover_single(ip, timeout=2)
-                if _normalizar_mac(dev.mac) == mac_objetivo:
-                    return ip
-            except Exception:
-                pass  # IP sin dispositivo kasa: silencio y seguimos
+            if await sonda(ip) == mac_objetivo:
+                return ip
             return None
 
-    resultados = await asyncio.gather(*[sondear(f"{base}.{i}") for i in range(1, 255)])
-    for ip in resultados:
-        if ip is not None:
-            return ip
+    for base in bases:
+        print(f"[actuador] Buscando {device_id} (MAC {mac_objetivo}) en {base}.0/24 ...")
+        resultados = await asyncio.gather(*[sondear(f"{base}.{i}") for i in range(1, 255)])
+        for ip in resultados:
+            if ip is not None:
+                return ip
     return None
 
 
@@ -249,8 +302,8 @@ async def ejecutar(device_id: str, device_cfg: dict, action: str):
         print(f"[actuador] Error con {device_id}: {e}")
 
     # Auto-recuperacion: quiza la IP cambio. Buscamos el aparato por su MAC
-    # (solo kasa por ahora; el barrido usa el discovery de python-kasa)
-    if tipo != "kasa":
+    # (aplica a los tipos con sonda registrada: kasa y cozylife)
+    if tipo not in SONDAS:
         return
 
     nueva_ip = await _rediscover_by_mac(device_id, device_cfg)
