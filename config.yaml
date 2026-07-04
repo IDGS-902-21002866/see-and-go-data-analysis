@@ -18,8 +18,8 @@ camera:
   width: 640
   height: 480
   headless: false # true = sin ventana de video (Pi por SSH, sin monitor)
-  hflip: false # espejo horizontal (solo csi)
-  vflip: false # volteo vertical (solo csi); hflip+vflip = rotacion 180
+  hflip: true # espejo horizontal (solo csi)
+  vflip: true # volteo vertical (solo csi); hflip+vflip = rotacion 180
 
 inference:
   confidence_threshold: 0.80 # ignorar predicciones con confianza menor a este valor
