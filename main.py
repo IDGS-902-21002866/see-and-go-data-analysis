@@ -4,6 +4,7 @@ from src.camera import Camera
 from src.config import load_config
 from src.classifier import Classifier
 from src.mqtt_publisher import StubPublisher, MqttPublisher
+from src.event_logger import StubLogger, MongoLogger
 
 import warnings
 
@@ -24,7 +25,33 @@ def main():
 
     debouncer = Debouncer(cooldown=config.inference.cooldown_seconds)
 
-    action_resolver = ActionResolver()
+    # Cargamos el mapeo gesto→accion: primero Mongo, si falla el stub JSON.
+    # Es UNA sola lectura al inicio de sesion (el loop nunca toca la red).
+    signs = ActionResolver.load_signs_from_mongo(
+        uri=config.mongo.uri,
+        database=config.mongo.database,
+        collection=config.mongo.collection_signs,
+        user_id=config.session.user_id,
+    )
+    if signs is not None:
+        print(f"Mapeo       : MongoDB ({len(signs)} gestos)")
+    else:
+        signs = ActionResolver.load_signs_from_stub()
+        print(f"Mapeo       : stub JSON local ({len(signs)} gestos) — Mongo no disponible")
+
+    action_resolver = ActionResolver(signs)
+
+    # Elegimos el logger de eventos: stub (imprime) o mongo (Atlas)
+    if config.mongo.logger == "mongo":
+        event_logger = MongoLogger(
+            uri=config.mongo.uri,
+            database=config.mongo.database,
+            collection=config.mongo.collection_events,
+        )
+        print("Logger      : MongoDB real")
+    else:
+        event_logger = StubLogger()
+        print("Logger      : Stub (solo consola)")
 
     # Elegimos el publisher segun config: stub (imprime) o mqtt (broker real)
     if config.mqtt.publisher == "mqtt":
@@ -46,6 +73,7 @@ def main():
         debouncer=debouncer,
         action_resolver=action_resolver,
         publisher=publisher,
+        event_logger=event_logger,
         skip_frames=config.inference.skip_frames,
         camera_type=config.camera.type,
         width=config.camera.width,

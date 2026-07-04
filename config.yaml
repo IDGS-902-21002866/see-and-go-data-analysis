@@ -8,6 +8,8 @@ mongo:
   database: seengo
   collection_signs: user_signs # mapeo gesto→accion por usuario
   collection_events: sign_events # telemetria de reconocimientos
+  collection_devices: user_devices # registro deviceId → tipo/host (lo usa el actuador)
+  logger: stub # stub = solo imprime (dev) | mongo = escribe eventos en MongoDB (produccion)
 
 model:
   path: models/rf_signs.joblib
@@ -28,3 +30,11 @@ inference:
 
 session:
   user_id: migueldr12 # userId fijo por sesion (mientras no haya login desde la app)
+
+# Dispositivos fisicos — FALLBACK local del actuador cuando Mongo no responde.
+# La fuente de verdad en produccion es la coleccion user_devices en Mongo.
+# La clave es el deviceId que viaja en el comando MQTT.
+devices:
+  foco-sala:
+    type: kasa # TP-Link Kasa KL125 — control local con python-kasa
+    host: 192.168.1.14 # IP del foco (kasa --host <ip> para verificar)

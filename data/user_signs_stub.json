@@ -1,15 +1,20 @@
 {
-  "user_id": "user_123",
+  "userId": "migueldr12",
   "signs": [
     {
       "gesture": "palma_abierta",
-      "deviceId": "device_456",
+      "deviceId": "foco-sala",
       "action": "on"
     },
     {
-      "gesture": "paz",
-      "deviceId": "device_456",
+      "gesture": "puno",
+      "deviceId": "foco-sala",
       "action": "off"
+    },
+    {
+      "gesture": "paz",
+      "deviceId": "foco-sala",
+      "action": "toggle"
     }
   ]
 }

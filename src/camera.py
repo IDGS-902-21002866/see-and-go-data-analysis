@@ -18,6 +18,7 @@ class Camera:
         debouncer=None,
         action_resolver=None,
         publisher=None,
+        event_logger=None,
         skip_frames=1,
         camera_type="webcam",
         width=640,
@@ -41,6 +42,9 @@ class Camera:
 
         # Guardamos el publisher (stub o MQTT real)
         self.publisher = publisher
+
+        # Guardamos el logger de eventos (stub o Mongo real)
+        self.event_logger = event_logger
 
         # Procesar 1 de cada skip_frames frames
         self.skip_frames = skip_frames
@@ -156,6 +160,20 @@ class Camera:
                                 }
                                 print(f"[{gesto} {confianza:.0%}] → {comando['deviceId']} / {comando['action']}")
                                 self.publisher.publish(comando)
+
+                                # Registramos el evento (contrato CLAUDE.md §5.3)
+                                # float() porque numpy.float no serializa a Mongo
+                                if self.event_logger is not None:
+                                    self.event_logger.log(
+                                        {
+                                            "userId": self.user_id,
+                                            "gesture": gesto,
+                                            "confidence": float(confianza),
+                                            "deviceId": accion["deviceId"],
+                                            "action": accion["action"],
+                                            "ts": comando["ts"],
+                                        }
+                                    )
                             else:
                                 print(f"No hay acción para el gesto: {gesto}")
 

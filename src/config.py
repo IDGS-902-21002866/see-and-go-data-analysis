@@ -20,6 +20,8 @@ class MongoConfig(BaseModel):
     database: str
     collection_signs: str
     collection_events: str
+    collection_devices: str = "user_devices"
+    logger: str = "stub"  # stub | mongo
 
 
 class ModelConfig(BaseModel):
