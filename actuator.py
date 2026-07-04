@@ -69,8 +69,39 @@ async def _driver_kasa(device_id: str, device_cfg: dict, action: str):
 
 
 async def _driver_tuya(device_id: str, device_cfg: dict, action: str):
-    # Pendiente (Fase 2): requiere device_id + local_key de tinytuya wizard
-    raise NotImplementedError("Driver tuya pendiente — Fase 2")
+    """Control LOCAL de dispositivos Tuya (Smart Life) con tinytuya.
+
+    Requiere en el registro: tuya_id, local_key y version (los da
+    `python -m tinytuya wizard` tras vincular la cuenta en iot.tuya.com).
+    tinytuya es sincrono → lo corremos en un hilo para no bloquear el loop.
+    """
+    import tinytuya
+
+    def _run():
+        d = tinytuya.OutletDevice(
+            device_cfg["tuya_id"], device_cfg["host"], device_cfg["local_key"]
+        )
+        d.set_version(float(device_cfg.get("version", 3.3)))
+        d.set_socketTimeout(5)
+
+        if action == "on":
+            resultado = d.turn_on()
+        elif action == "off":
+            resultado = d.turn_off()
+        elif action == "toggle":
+            estado = d.status()
+            if "Error" in estado:
+                raise ConnectionError(f"tuya status: {estado}")
+            # dps '1' es el switch principal en enchufes Tuya
+            encendido = bool(estado.get("dps", {}).get("1"))
+            resultado = d.turn_off() if encendido else d.turn_on()
+        else:
+            raise ValueError(f"Accion desconocida: {action}")
+
+        if isinstance(resultado, dict) and "Error" in resultado:
+            raise ConnectionError(f"tuya: {resultado}")
+
+    await asyncio.to_thread(_run)
 
 
 DRIVERS = {
