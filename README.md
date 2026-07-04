@@ -164,6 +164,8 @@ seengo-gesture-pipeline/
 
 ## 4. Instalación y setup
 
+### Dev (Windows + webcam USB)
+
 ```powershell
 # 1. Clonar y entrar
 git clone <repo>
@@ -173,37 +175,72 @@ cd seengo-gesture-pipeline
 python -m venv env
 env\Scripts\Activate.ps1
 
-# 3. Instalar dependencias de desarrollo (Windows)
+# 3. Instalar dependencias
 pip install -r requirements.txt
 ```
 
-`requirements.txt` (runtime + dev en Windows):
-```
-opencv-python
-mediapipe==0.10.14
-numpy
-scikit-learn      # Random Forest
-joblib            # cargar/guardar el modelo .joblib
-paho-mqtt         # cliente MQTT
-pymongo           # cliente MongoDB
-pyyaml            # leer config.yaml
-pydantic          # validar config
-python-dotenv     # leer .env
-```
-
-`requirements-pi.txt` (se instala SOLO en la Raspberry Pi, no en Windows):
-```
-picamera2         # cámara CSI
-gpiozero          # GPIO (uso futuro)
-```
-
-Levantar infraestructura local con Docker (se usa a partir del hito M7):
+Levantar infraestructura local con Docker (a partir del hito M7):
 ```powershell
-# Broker MQTT (Mosquitto)
+# Broker MQTT
 docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto
 
 # MongoDB
 docker run -d --name mongo -p 27017:27017 mongo
+```
+
+> En dev usa `skip_frames: 1` en `config.yaml` para procesar todos los frames
+> (la PC tiene CPU de sobra). En la Pi cambia a `2` o `3`.
+
+### Producción (Raspberry Pi 3)
+
+Todo corre en la misma Pi 3:
+
+```
+Raspberry Pi 3
+├── SeeNGo pipeline      ← este repo
+├── Mosquitto            ← broker MQTT (add-on de Home Assistant)
+└── Home Assistant       ← controla los dispositivos WiFi
+```
+
+**MongoDB** corre en la nube usando el free tier de **MongoDB Atlas** (512 MB gratuitos)
+para no saturar la RAM de la Pi 3.
+
+**Acceso remoto desde app móvil:**
+- **Nabu Casa** ($6.50/mes) — servicio oficial de Home Assistant, da acceso remoto sin abrir puertos
+- **Cloudflare Tunnel** (gratis) — alternativa self-hosted
+
+**Instalar Home Assistant OS en la Pi 3:**
+1. Descarga la imagen de [Home Assistant OS para Pi 3](https://www.home-assistant.io/installation/raspberrypi)
+2. Grábala en la microSD con Raspberry Pi Imager
+3. Arranca la Pi y entra a `http://homeassistant.local:8123`
+4. En Home Assistant → **Settings → Add-ons → Mosquitto broker** (instala el add-on oficial)
+5. Configura las credenciales MQTT en el add-on y actualiza tu `.env`
+
+**Instalar SeeNGo en la Pi 3** (una vez que Home Assistant OS esté corriendo):
+```bash
+# Home Assistant OS no tiene Python nativo — usa el add-on "Terminal & SSH"
+# o instala en un contenedor Docker separado
+pip install -r requirements.txt
+pip install -r requirements-pi.txt
+```
+
+`requirements.txt` (runtime compartido Windows + Pi):
+```
+opencv-python
+mediapipe==0.10.14
+numpy
+scikit-learn
+joblib
+paho-mqtt
+pymongo
+pyyaml
+pydantic
+python-dotenv
+```
+
+`requirements-pi.txt` (solo en la Pi):
+```
+picamera2
 ```
 
 ---
@@ -354,11 +391,64 @@ Al terminar M9, con la webcam en Windows:
 
 ## 7. Despliegue en la Raspberry Pi
 
-- Cámara CSI Freenove IMX219 (clon): en `/boot/firmware/config.txt` añade
-  `camera_auto_detect=0` y `dtoverlay=imx219`, y reinicia.
-- Mantén la inferencia a **640×480**; subir la resolución degrada el throughput en la Pi 3.
-- MediaPipe corre sobre CPU: vigila el uso de núcleos; si el FPS lo permite, puedes saltar frames.
-- `picamera2` y `gpiozero` solo existen en la Pi (`requirements-pi.txt`), no en Windows.
+### Configurar la cámara CSI
+
+Cámara Freenove IMX219 (clon). En `/boot/firmware/config.txt` añade y reinicia:
+```
+camera_auto_detect=0
+dtoverlay=imx219
+```
+
+### Optimizaciones de carga para Pi 3
+
+La Pi 3 tiene 1 GB de RAM y 4 núcleos ARM Cortex-A53 a 1.2 GHz. MediaPipe + Home Assistant
+juntos pueden saturarla. Aplica estas optimizaciones (ya implementadas en el código):
+
+| Optimización | Dónde | Impacto |
+|---|---|---|
+| `skip_frames: 2` en `config.yaml` | `config.yaml` → `inference` | Inferencia cada 2 frames; el video sigue fluido |
+| Resolución 640×480 | `config.yaml` → `camera` | No subir; más resolución = más CPU en MediaPipe |
+| `max_num_hands=1` en MediaPipe | `src/landmarks.py` | Solo rastrear una mano reduce carga |
+| MongoDB en Atlas (nube) | `.env` → `MONGO_URI` | Saca las escrituras de la RAM local |
+
+**`skip_frames` explicado:** el pipeline lee cada frame de la cámara pero solo corre
+MediaPipe + Random Forest en 1 de cada N frames. Los frames omitidos se muestran en pantalla
+igualmente (video fluido) pero no consumen CPU de inferencia. Con `skip_frames: 2` reduces
+la carga de inferencia a la mitad; con `3`, a un tercio.
+
+Para domótica esto es suficiente — no necesitas clasificar a 30 FPS para detectar una seña sostenida.
+
+### MongoDB Atlas (nube gratuita)
+
+1. Crea cuenta en [mongodb.com/cloud/atlas](https://www.mongodb.com/cloud/atlas)
+2. Crea un cluster gratuito (M0, 512 MB)
+3. Crea usuario de base de datos y copia el URI de conexión
+4. En tu `.env` en la Pi: `MONGO_URI=mongodb+srv://usuario:password@cluster.mongodb.net/`
+5. En Atlas → Network Access → añade la IP de la Pi (o `0.0.0.0/0` para desarrollo)
+
+### Autoarranque del pipeline al encender la Pi
+
+Crea el archivo `/etc/systemd/system/seengo.service`:
+```ini
+[Unit]
+Description=SeeNGo Gesture Pipeline
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/seengo-gesture-pipeline
+ExecStart=/home/pi/seengo-gesture-pipeline/env/bin/python main.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Actívalo:
+```bash
+sudo systemctl enable seengo
+sudo systemctl start seengo
+```
 
 ---
 

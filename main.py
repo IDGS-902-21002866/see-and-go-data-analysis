@@ -1,3 +1,4 @@
+from src.action_resolver import ActionResolver
 from src.debounce import Debouncer
 from src.camera import Camera
 from src.config import load_config
@@ -22,8 +23,14 @@ def main():
 
     debouncer = Debouncer(cooldown=config.inference.cooldown_seconds)
 
+    action_resolver = ActionResolver()
+
     camera = Camera(
-        camera_index=config.camera.index, classifier=classifier, debouncer=debouncer
+        camera_index=config.camera.index,
+        classifier=classifier,
+        debouncer=debouncer,
+        action_resolver=action_resolver,
+        skip_frames=config.inference.skip_frames,
     )
     camera.start()
 

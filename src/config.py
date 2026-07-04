@@ -34,6 +34,7 @@ class CameraConfig(BaseModel):
 class InferenceConfig(BaseModel):
     confidence_threshold: float
     cooldown_seconds: float
+    skip_frames: int = 1
 
 
 class SessionConfig(BaseModel):

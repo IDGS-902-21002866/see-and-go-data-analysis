@@ -19,6 +19,7 @@ camera:
 inference:
   confidence_threshold: 0.80 # ignorar predicciones con confianza menor a este valor
   cooldown_seconds: 1.0 # tiempo minimo entre disparos del mismo gesto (debounce)
+  skip_frames: 2 # procesar 1 de cada N frames (1 = todos; 2-3 recomendado en Pi 3)
 
 session:
   user_id: migueldr12 # userId fijo por sesion (mientras no haya login desde la app)

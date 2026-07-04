@@ -1,0 +1,15 @@
+{
+  "user_id": "user_123",
+  "signs": [
+    {
+      "gesture": "palma_abierta",
+      "deviceId": "device_456",
+      "action": "on"
+    },
+    {
+      "gesture": "paz",
+      "deviceId": "device_456",
+      "action": "off"
+    }
+  ]
+}

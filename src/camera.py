@@ -11,15 +11,29 @@ class Camera:
     # camara_index = 0 quiere decir que se usa la camara por defecto del sistema
     # classifier como None
     #  Si se tienen varias camaras 0 = camara principal, 1 = segunda camara
-    def __init__(self, camera_index=0, classifier=None, debouncer=None):
+    def __init__(
+        self,
+        camera_index=0,
+        classifier=None,
+        debouncer=None,
+        action_resolver=None,
+        skip_frames=1,
+    ):
         #  Guardamos el índice de la cámara en la instancia
         self.camera_index = camera_index
 
         # Guardamos el clasificador
         self.classifier = classifier
 
+        # Guardamos el resolvedor de acciones
+        self.action_resolver = action_resolver
+
         # Guardamos el debouncer
         self.debouncer = debouncer
+
+        # Procesar 1 de cada skip_frames frames
+        self.skip_frames = skip_frames
+        self._frame_count = 0
 
         # Guardamos el opjeto de videocapture de openCv
         self.cap = None
@@ -53,6 +67,17 @@ class Camera:
                 # Rompemos el loop
                 break
 
+            # Saltamos frames para reducir carga de CPU en Pi 3
+            # El video se muestra siempre; la inferencia solo corre cada skip_frames frames
+
+            self._frame_count += 1
+            if self._frame_count % self.skip_frames != 0:
+                cv2.imshow("Gesture Assitant", frame)
+                key = cv2.waitKey(1)
+                if key == ord("q"):
+                    break
+                continue
+
             # Usamos el frame que detecto OpenCV y lo procesamos
             # detect() ahora devuelve (frame, features)
             # features es None si no hay mano en el frame
@@ -71,8 +96,12 @@ class Camera:
                     2,
                 )
 
-                if gesto is not None and self.debouncer.should_fire(gesto):
-                    print(f"Disparando gesto: {gesto}")
+                if self.debouncer.should_fire(gesto):
+                    accion = self.action_resolver.resolve(gesto)
+                    if accion is not None:
+                        print(f"Ejecutando acción: {accion}")
+                    if accion is None:
+                        print(f"No hay acción para el gesto: {gesto}")
 
             # Primer parametro, nombre de la ventana. Segundo parametro, frame que queremos mostrar
             cv2.imshow("Gesture Assitant", frame)
