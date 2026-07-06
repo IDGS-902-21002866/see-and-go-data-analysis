@@ -426,29 +426,64 @@ Para domótica esto es suficiente — no necesitas clasificar a 30 FPS para dete
 4. En tu `.env` en la Pi: `MONGO_URI=mongodb+srv://usuario:password@cluster.mongodb.net/`
 5. En Atlas → Network Access → añade la IP de la Pi (o `0.0.0.0/0` para desarrollo)
 
-### Autoarranque del pipeline al encender la Pi
+### Autoarranque con systemd (pipeline + actuador)
 
-Crea el archivo `/etc/systemd/system/seengo.service`:
+Dos servicios: arrancan solos al prender la Pi y se reinician si truenan.
+
+**Servicio del actuador** — `/etc/systemd/system/seengo-actuator.service`:
 ```ini
 [Unit]
-Description=SeeNGo Gesture Pipeline
-After=network.target
+Description=SeeNGo Actuador (MQTT -> dispositivos)
+After=network-online.target mosquitto.service
+Wants=network-online.target
 
 [Service]
 User=pi
-WorkingDirectory=/home/pi/seengo-gesture-pipeline
-ExecStart=/home/pi/seengo-gesture-pipeline/env/bin/python main.py
+WorkingDirectory=/home/pi/see-and-go-data-analysis
+ExecStart=/home/pi/see-and-go-data-analysis/env/bin/python actuator.py
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Actívalo:
-```bash
-sudo systemctl enable seengo
-sudo systemctl start seengo
+**Servicio del pipeline** — `/etc/systemd/system/seengo-pipeline.service`:
+```ini
+[Unit]
+Description=SeeNGo Pipeline (camara -> gestos -> MQTT)
+After=network-online.target mosquitto.service seengo-actuator.service
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/see-and-go-data-analysis
+ExecStart=/home/pi/see-and-go-data-analysis/env/bin/python main.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
+
+**Activarlos:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now seengo-actuator seengo-pipeline
+systemctl status seengo-actuator seengo-pipeline   # ambos deben decir active (running)
+```
+
+**Operacion diaria:**
+
+| Qué | Comando |
+|---|---|
+| Logs en vivo del pipeline | `journalctl -u seengo-pipeline -f` |
+| Logs en vivo del actuador | `journalctl -u seengo-actuator -f` |
+| Reiniciar tras un `git pull` | `sudo systemctl restart seengo-pipeline seengo-actuator` |
+| Detener (para depurar a mano) | `sudo systemctl stop seengo-pipeline seengo-actuator` |
+
+> ⚠️ Con el servicio corriendo, la camara queda ocupada: para correr
+> `python main.py` a mano hay que detener primero `seengo-pipeline`.
 
 ---
 

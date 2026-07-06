@@ -20,6 +20,7 @@ import json
 import os
 import socket
 import time
+from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -226,11 +227,80 @@ SONDAS = {
 }
 
 
-async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
-    """Barre la subred sondeando IP por IP hasta hallar la MAC del dispositivo.
+async def descubrir_red() -> list:
+    """Escanea la subred actual buscando dispositivos compatibles.
 
-    Dirigido (no broadcast), asi funciona aunque el router lo bloquee.
-    Devuelve la nueva IP, o None si no aparecio en la red.
+    Devuelve [{"type", "host", "mac"}]. El discovery periodico lo sube a
+    Mongo (discovered_devices) para que la app movil muestre que hay en la
+    red y el usuario pueda registrarlo con nombre propio.
+    """
+    base = _subred_local()
+    if base is None:
+        return []
+
+    sem = asyncio.Semaphore(30)
+    encontrados = []
+
+    async def sondear(ip: str):
+        async with sem:
+            for tipo, sonda in SONDAS.items():
+                mac = await sonda(ip)
+                if mac:
+                    encontrados.append({"type": tipo, "host": ip, "mac": mac})
+                    return
+
+    await asyncio.gather(*[sondear(f"{base}.{i}") for i in range(1, 255)])
+    return encontrados
+
+
+async def _resolver_ip_por_mac(mac_objetivo: str) -> str | None:
+    """Resuelve MAC → IP usando la tabla ARP del sistema (rapido, ~3 s).
+
+    Truco: mandamos un datagrama UDP a cada IP de la subred; eso obliga al
+    kernel a resolver por ARP quien esta en cada direccion. Luego leemos
+    /proc/net/arp y buscamos la MAC. Funciona sin importar que puertos
+    tenga abiertos el dispositivo.
+    """
+    base = _subred_local()
+    if base is None:
+        return None
+
+    def _provocar_arp():
+        for i in range(1, 255):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setblocking(False)
+                s.sendto(b"", (f"{base}.{i}", 9))  # puerto discard; no esperamos nada
+                s.close()
+            except Exception:
+                pass
+
+    await asyncio.to_thread(_provocar_arp)
+    await asyncio.sleep(2)  # tiempo para que lleguen las respuestas ARP
+
+    def _leer_tabla_arp() -> dict:
+        tabla = {}
+        with open("/proc/net/arp") as f:
+            next(f)  # header
+            for linea in f:
+                campos = linea.split()
+                if len(campos) >= 4 and campos[3] != "00:00:00:00:00:00":
+                    tabla[_normalizar_mac(campos[3])] = campos[0]
+        return tabla
+
+    tabla = await asyncio.to_thread(_leer_tabla_arp)
+    return tabla.get(mac_objetivo)
+
+
+# Evita que varios comandos encolen re-descubrimientos encimados
+_rediscover_lock = asyncio.Lock()
+
+
+async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
+    """Encuentra la IP actual del dispositivo a partir de su MAC.
+
+    Primero via tabla ARP (rapido); si no aparece, barrido de puertos
+    dirigido IP por IP como respaldo. Devuelve la nueva IP o None.
     """
     sonda = SONDAS.get(device_cfg.get("type"))
     if sonda is None:
@@ -240,6 +310,12 @@ async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
     if not mac_objetivo:
         print(f"[actuador] {device_id} no tiene MAC registrada; no puedo re-descubrir")
         return None
+
+    # Rapido: resolver por ARP (~3 s)
+    print(f"[actuador] Resolviendo {device_id} por MAC {mac_objetivo} (ARP)...")
+    ip = await _resolver_ip_por_mac(mac_objetivo)
+    if ip is not None:
+        return ip
 
     # Subredes a revisar: la actual de la Pi primero, la del registro despues
     bases = []
@@ -268,9 +344,11 @@ async def _rediscover_by_mac(device_id: str, device_cfg: dict) -> str | None:
     return None
 
 
-# Handle a la coleccion user_devices (se asigna en main si Mongo respondio);
-# permite persistir la IP nueva para que sobreviva reinicios del actuador
+# Handles a colecciones de Mongo (se asignan si Mongo respondio):
+# user_devices para persistir IPs re-descubiertas, discovered_devices para
+# publicar lo que el discovery periodico encuentra en la red
 _devices_collection = None
+_discovered_collection = None
 
 
 def _update_host_in_mongo(device_id: str, host: str) -> None:
@@ -333,7 +411,7 @@ async def ejecutar(device_id: str, device_cfg: dict, action: str):
 
 def load_devices_from_mongo(uri: str, database: str, collection: str) -> dict | None:
     """Lee user_devices y devuelve {deviceId: doc}, o None si Mongo falla."""
-    global _devices_collection
+    global _devices_collection, _discovered_collection
     try:
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         col = client[database][collection]
@@ -341,12 +419,61 @@ def load_devices_from_mongo(uri: str, database: str, collection: str) -> dict | 
         if not docs:
             print("[actuador] user_devices vacio en Mongo")
             return None
-        # Guardamos el handle para poder persistir IPs re-descubiertas
+        # Guardamos los handles para persistir IPs y publicar el discovery
         _devices_collection = col
+        _discovered_collection = client[database]["discovered_devices"]
         return {d["deviceId"]: d for d in docs}
     except Exception as e:
         print(f"[actuador] No se pudo leer user_devices: {e}")
         return None
+
+
+# -----------------------------------------------------------------
+# Tareas de fondo: puente con la app movil (via Mongo Atlas)
+# -----------------------------------------------------------------
+
+
+async def _discovery_periodico(intervalo: int = 600):
+    """Cada N segundos escanea la red y sube lo encontrado a Mongo.
+
+    La app movil lee discovered_devices (via la API) para mostrar la lista
+    de "dispositivos disponibles" al usuario. last_seen permite filtrar los
+    que llevan mucho sin verse.
+    """
+    while True:
+        try:
+            encontrados = await descubrir_red()
+            print(f"[actuador] Discovery: {len(encontrados)} dispositivo(s) en la red")
+            if _discovered_collection is not None and encontrados:
+
+                def _guardar():
+                    for d in encontrados:
+                        _discovered_collection.update_one(
+                            {"mac": d["mac"]},
+                            {"$set": {**d, "last_seen": datetime.now(timezone.utc)}},
+                            upsert=True,
+                        )
+
+                await asyncio.to_thread(_guardar)
+        except Exception as e:
+            print(f"[actuador] Discovery fallo: {e}")
+        await asyncio.sleep(intervalo)
+
+
+async def _reload_periodico(devices: dict, uri: str, database: str, collection: str, intervalo: int = 60):
+    """Relee user_devices cada N segundos y actualiza el registro en caliente.
+
+    Asi, cuando la app registra/edita un dispositivo en Mongo, la Pi lo
+    adopta sola en menos de un minuto, sin reiniciar el servicio.
+    """
+    while True:
+        await asyncio.sleep(intervalo)
+        nuevos = await asyncio.to_thread(load_devices_from_mongo, uri, database, collection)
+        if nuevos is not None and set(nuevos) != set(devices):
+            print(f"[actuador] Registro actualizado: {list(nuevos)}")
+        if nuevos is not None:
+            devices.clear()
+            devices.update(nuevos)
 
 
 def main():
@@ -409,6 +536,16 @@ def main():
     client.loop_start()
 
     print(f"[actuador] Escuchando {mqtt_cfg['topic_prefix']}/# — dispositivos: {list(devices)}")
+
+    # Tareas de fondo para la app movil: publicar que hay en la red y
+    # adoptar en caliente los dispositivos que la app registre en Mongo
+    loop.create_task(_discovery_periodico())
+    loop.create_task(
+        _reload_periodico(
+            devices, uri, mongo_cfg["database"],
+            mongo_cfg.get("collection_devices", "user_devices"),
+        )
+    )
 
     try:
         loop.run_forever()
