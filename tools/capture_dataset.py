@@ -19,7 +19,19 @@ hand_detector = HandDetector()
 
 # Mapa tecla -> nombre del gesto
 # Agrega o quita gestos aqui segun lo que quieras capturar
-GESTOS = {"1": "palma_abierta", "2": "puno", "3": "paz", "4": "like", "5": "rock"}
+GESTOS = {
+    "1": "palma_abierta",
+    "2": "puno",
+    "3": "paz",
+    "4": "like",
+    "5": "rock",
+    "6": "ok",
+    "7": "loser",
+    "8": "dedo_indice",
+    "9": "dedo_medio",
+    "0": "dedo_anular",
+    "m": "dedo_meñique",
+}
 
 # Ruta del archivo CSV donde se guardaran las muestras
 CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "landmarks.csv")
